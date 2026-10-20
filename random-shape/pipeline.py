@@ -8,6 +8,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.integrate import solve_ivp
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -17,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from corexy.model import CoreXYModel
 from inverse_dynamics import inverse_dynamics, trajectory_state
+from plot_style import FIGURE_SIZE, SQUARE_FIGURE_SIZE, configure_plots, format_axes, save_figure
 
 from fourier_curve import (
     FourierCurve,
@@ -37,48 +39,69 @@ def save_processing_plots(
     curve: FourierCurve,
     output: Path,
 ) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
-    axes[0].imshow(gray, cmap="gray")
-    axes[0].set_title("Input image")
-    axes[0].set_axis_off()
-    axes[1].imshow(mask, cmap="gray")
-    axes[1].set_title("Detected silhouette")
-    axes[1].set_axis_off()
-    fig.savefig(output / "01_silhouette.png", dpi=180)
+    fig, ax = plt.subplots(figsize=SQUARE_FIGURE_SIZE, constrained_layout=True)
+    ax.imshow(gray, cmap="gray")
+    ax.set_axis_off()
+    save_figure(fig, output / "01_input_image.png")
     plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(6, 6), constrained_layout=True)
-    ax.plot(contour[:, 0], contour[:, 1], linewidth=1)
-    ax.scatter(contour[0, 0], contour[0, 1], color="red", label="start", zorder=2)
-    ax.set(title="Ordered contour", xlabel="pixel x", ylabel="pixel y", aspect="equal")
+    fig, ax = plt.subplots(figsize=SQUARE_FIGURE_SIZE, constrained_layout=True)
+    ax.imshow(mask, cmap="gray")
+    ax.set_axis_off()
+    save_figure(fig, output / "02_silhouette.png")
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=SQUARE_FIGURE_SIZE, constrained_layout=True)
+    ax.plot(contour[:, 0], contour[:, 1])
+    ax.scatter(contour[0, 0], contour[0, 1], color="red", s=45, label=r"$\mathrm{Start}$", zorder=2)
+    ax.set(xlabel=r"$x\ [\mathrm{pixel}]$", ylabel=r"$y\ [\mathrm{pixel}]$")
+    format_axes(ax, equal=True)
     ax.legend()
-    fig.savefig(output / "02_ordered_contour.png", dpi=180)
+    save_figure(fig, output / "03_ordered_contour.png")
     plt.close(fig)
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
-    color = axes[0].scatter(sampled[:, 0], sampled[:, 1], c=parameter, s=5, cmap="viridis")
-    axes[0].set(title="Uniform arc-length samples", xlabel="x [m]", ylabel="y [m]", aspect="equal")
-    fig.colorbar(color, ax=axes[0], label="normalized cumulative arc length")
-    axes[1].plot(parameter, sampled[:, 0], label="x(s)")
-    axes[1].plot(parameter, sampled[:, 1], label="y(s)")
-    axes[1].set(title="Arc-length parametrization", xlabel="s", ylabel="position [m]")
-    axes[1].legend()
-    fig.savefig(output / "03_arclength.png", dpi=180)
+    fig, ax = plt.subplots(figsize=SQUARE_FIGURE_SIZE, constrained_layout=True)
+    color = ax.scatter(sampled[:, 0], sampled[:, 1], c=parameter, s=12, cmap="viridis")
+    ax.set(xlabel=r"$x\ [\mathrm{m}]$", ylabel=r"$y\ [\mathrm{m}]$")
+    format_axes(ax, equal=True)
+    divider = make_axes_locatable(ax)
+    colorbar_ax = divider.append_axes("right", size="5%", pad=0.15)
+    colorbar = fig.colorbar(color, cax=colorbar_ax)
+    colorbar.set_label(r"$\mathrm{Normalized\ cumulative\ arc\ length}$")
+    colorbar.locator = matplotlib.ticker.MaxNLocator(nbins=5)
+    colorbar.update_ticks()
+    colorbar.ax.tick_params(width=1.6, length=7)
+    colorbar.outline.set_linewidth(1.6)
+    save_figure(fig, output / "04_arclength_samples.png")
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=FIGURE_SIZE, constrained_layout=True)
+    ax.plot(parameter, sampled[:, 0], label=r"$x(s)$")
+    ax.plot(parameter, sampled[:, 1], label=r"$y(s)$")
+    ax.set(xlabel=r"$s$", ylabel=r"$\mathrm{Position}\ [\mathrm{m}]$")
+    format_axes(ax)
+    ax.legend()
+    save_figure(fig, output / "05_arclength_coordinates.png")
     plt.close(fig)
 
     order = np.argsort(curve.frequencies)
-    fig, ax = plt.subplots(figsize=(8, 4), constrained_layout=True)
-    ax.stem(curve.frequencies[order], np.abs(curve.coefficients[order]))
-    ax.set(title="Fourier coefficient magnitudes", xlabel="harmonic k", ylabel="|c_k| [m]")
-    fig.savefig(output / "04_fourier_spectrum.png", dpi=180)
+    fig, ax = plt.subplots(figsize=FIGURE_SIZE, constrained_layout=True)
+    markerline, stemlines, baseline = ax.stem(curve.frequencies[order], np.abs(curve.coefficients[order]))
+    plt.setp(stemlines, linewidth=1.8)
+    plt.setp(markerline, markersize=5)
+    plt.setp(baseline, linewidth=1.6)
+    ax.set(xlabel=r"$k$", ylabel=r"$|c_k|\ [\mathrm{m}]$")
+    format_axes(ax)
+    save_figure(fig, output / "06_fourier_spectrum.png")
     plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(6, 6), constrained_layout=True)
-    ax.plot(sampled[:, 0], sampled[:, 1], label="arc-length contour", alpha=0.7)
-    ax.plot(reconstructed[:, 0], reconstructed[:, 1], "--", label="Fourier reconstruction")
-    ax.set(title="Fourier reconstruction", xlabel="x [m]", ylabel="y [m]", aspect="equal")
+    fig, ax = plt.subplots(figsize=SQUARE_FIGURE_SIZE, constrained_layout=True)
+    ax.plot(sampled[:, 0], sampled[:, 1], label=r"$\mathrm{Arc\mbox{-}length\ contour}$", alpha=0.75)
+    ax.plot(reconstructed[:, 0], reconstructed[:, 1], "--", label=r"$\mathrm{Fourier\ reconstruction}$")
+    ax.set(xlabel=r"$x\ [\mathrm{m}]$", ylabel=r"$y\ [\mathrm{m}]$")
+    format_axes(ax, equal=True)
     ax.legend()
-    fig.savefig(output / "05_reconstruction.png", dpi=180)
+    save_figure(fig, output / "07_reconstruction.png")
     plt.close(fig)
 
 
@@ -106,6 +129,7 @@ def simulate(curve: FourierCurve, period: float, samples: int):
 
 def run(image: Path, order: int, contour_samples: int, simulation_samples: int,
         workspace_size: float, period: float, output_root: Path) -> Path:
+    configure_plots()
     output = output_root / image.stem
     output.mkdir(parents=True, exist_ok=True)
 
@@ -128,16 +152,22 @@ def run(image: Path, order: int, contour_samples: int, simulation_samples: int,
     np.savez(output / "simulation.npz", time=time, state=state,
              reference=reference, actual=actual, voltage=voltage)
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 5), constrained_layout=True)
-    axes[0].plot(*reference, "--", label="Fourier trajectory")
-    axes[0].plot(*actual, label="simulated dynamics")
-    axes[0].set(title="Resulting tool-head trajectory", xlabel="x [m]", ylabel="y [m]", aspect="equal")
-    axes[0].legend()
-    axes[1].plot(time, voltage[0], label=r"$u_x$")
-    axes[1].plot(time, voltage[1], label=r"$u_y$")
-    axes[1].set(title="Inverse-dynamics inputs", xlabel="time [s]", ylabel="voltage [V]")
-    axes[1].legend()
-    fig.savefig(output / "06_dynamics_and_voltages.png", dpi=180)
+    fig, ax = plt.subplots(figsize=SQUARE_FIGURE_SIZE, constrained_layout=True)
+    ax.plot(*reference, "--", label=r"$\mathrm{Fourier\ trajectory}$")
+    ax.plot(*actual, label=r"$\mathrm{Simulated\ dynamics}$")
+    ax.set(xlabel=r"$x\ [\mathrm{m}]$", ylabel=r"$y\ [\mathrm{m}]$")
+    format_axes(ax, equal=True)
+    ax.legend()
+    save_figure(fig, output / "08_trajectory.png")
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=FIGURE_SIZE, constrained_layout=True)
+    ax.plot(time, voltage[0], label=r"$u_x$")
+    ax.plot(time, voltage[1], label=r"$u_y$")
+    ax.set(xlabel=r"$t\ [\mathrm{s}]$", ylabel=r"$\mathrm{Voltage}\ [\mathrm{V}]$")
+    format_axes(ax)
+    ax.legend()
+    save_figure(fig, output / "09_voltages.png")
     plt.close(fig)
 
     error = np.linalg.norm(actual - reference, axis=0)
@@ -155,7 +185,7 @@ def run(image: Path, order: int, contour_samples: int, simulation_samples: int,
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", type=Path, nargs="?", default=BASE_DIR / "inputs" / "Catalunya.png")
-    parser.add_argument("--order", type=int, default=50)
+    parser.add_argument("--order", type=int, default=60)
     parser.add_argument("--contour-samples", type=int, default=2048)
     parser.add_argument("--simulation-samples", type=int, default=2001)
     parser.add_argument("--workspace-size", type=float, default=0.16, help="largest shape span [m]")

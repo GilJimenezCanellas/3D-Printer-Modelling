@@ -2,12 +2,15 @@
 
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
 from scipy.integrate import solve_ivp
 
 from corexy.model import CoreXYModel
+from plot_style import FIGURE_SIZE, SQUARE_FIGURE_SIZE, configure_plots, format_axes, save_figure
 
 
 # Desired ellipse: x(t) = A*cos(omega*t), y(t) = B*sin(omega*t).
@@ -51,6 +54,7 @@ def initial_state(model: CoreXYModel) -> NDArray[np.float64]:
 
 
 def main() -> None:
+    configure_plots()
     model = CoreXYModel()
     time = np.linspace(0.0, PERIOD, SAMPLES)
     solution = solve_ivp(
@@ -73,32 +77,43 @@ def main() -> None:
     )
     axis_inputs = np.column_stack([inputs(t, model) for t in time])
 
-    fig, axes = plt.subplots(1, 3, figsize=(14, 4), constrained_layout=True)
-    axes[0].plot(*reference, "--", label="analytical ellipse")
-    axes[0].plot(*position, label="simulated model")
-    axes[0].set(
-        xlabel="x [m]", ylabel="y [m]", title="Tool-head path", aspect="equal"
-    )
-    axes[0].legend()
-
-    axes[1].plot(time, position[0], label="x")
-    axes[1].plot(time, position[1], label="y")
-    axes[1].set(xlabel="time [s]", ylabel="position [m]", title="Position")
-    axes[1].legend()
-
-    axes[2].plot(time, axis_inputs[0], label=r"$u_x$")
-    axes[2].plot(time, axis_inputs[1], label=r"$u_y$")
-    axes[2].set(xlabel="time [s]", ylabel="voltage [V]", title="Axis inputs")
-    axes[2].legend()
-
     output_directory = Path("outputs")
     output_directory.mkdir(exist_ok=True)
-    destination = output_directory / "q1_4_ellipse.png"
-    fig.savefig(destination, dpi=180)
-    plt.show()
+
+    fig, ax = plt.subplots(figsize=SQUARE_FIGURE_SIZE, constrained_layout=True)
+    ax.plot(*reference, "--", label=r"$\mathrm{Analytical\ ellipse}$")
+    ax.plot(*position, label=r"$\mathrm{Simulated\ model}$")
+    ax.set(xlabel=r"$x\ [\mathrm{m}]$", ylabel=r"$y\ [\mathrm{m}]$")
+    format_axes(ax, equal=True)
+    ax.legend()
+    path_destination = output_directory / "q1_4_ellipse_path.png"
+    save_figure(fig, path_destination)
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=FIGURE_SIZE, constrained_layout=True)
+    ax.plot(time, position[0], label=r"$x$")
+    ax.plot(time, position[1], label=r"$y$")
+    ax.set(xlabel=r"$t\ [\mathrm{s}]$", ylabel=r"$\mathrm{Position}\ [\mathrm{m}]$")
+    format_axes(ax)
+    ax.legend()
+    position_destination = output_directory / "q1_4_ellipse_position.png"
+    save_figure(fig, position_destination)
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=FIGURE_SIZE, constrained_layout=True)
+    ax.plot(time, axis_inputs[0], label=r"$u_x$")
+    ax.plot(time, axis_inputs[1], label=r"$u_y$")
+    ax.set(xlabel=r"$t\ [\mathrm{s}]$", ylabel=r"$\mathrm{Voltage}\ [\mathrm{V}]$")
+    format_axes(ax)
+    ax.legend()
+    inputs_destination = output_directory / "q1_4_ellipse_inputs.png"
+    save_figure(fig, inputs_destination)
+    plt.close(fig)
 
     maximum_error = np.max(np.linalg.norm(position - reference, axis=0))
-    print(f"Saved {destination}")
+    print(f"Saved {path_destination}")
+    print(f"Saved {position_destination}")
+    print(f"Saved {inputs_destination}")
     print(f"Maximum position error: {maximum_error:.3e} m")
 
 
