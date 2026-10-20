@@ -10,14 +10,16 @@ white-on-black images are both accepted.
    prevalent colour is treated as foreground and its largest connected component
    is retained.
 
-   ![Catalunya input and detected silhouette](docs/images/catalunya_silhouette.png)
+   ![Catalunya detected silhouette](docs/images/catalunya_silhouette.png)
 
 2. **Ordered contour and arc-length parametrization.** The outer boundary is
    traced in order, closed, and resampled at uniformly spaced values of normalized
    cumulative arc length, `s` in `[0, 1)`. This prevents drawing speed from
    depending on the original pixel sampling.
 
-   ![Catalunya arc-length parametrization](docs/images/catalunya_arclength.png)
+   ![Catalunya uniform arc-length samples](docs/images/catalunya_arclength_samples.png)
+
+   ![Catalunya arc-length coordinates](docs/images/catalunya_arclength_coordinates.png)
 
 3. **Two-dimensional Fourier series.** The sampled curve is represented by the
    complex signal `z(s) = x(s) + j y(s)` and approximated by
@@ -43,7 +45,9 @@ white-on-black images are both accepted.
    These voltages are applied to the forward six-state model. Agreement between
    its `(x,y)` states and the Fourier reference verifies the calculation.
 
-   ![Catalunya simulated trajectory and inputs](docs/images/catalunya_dynamics.png)
+   ![Catalunya simulated trajectory](docs/images/catalunya_trajectory.png)
+
+   ![Catalunya inverse-dynamics inputs](docs/images/catalunya_voltages.png)
 
 ## Files and outputs
 
