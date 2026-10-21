@@ -27,8 +27,6 @@ def inverse_dynamics(
     velocity = np.asarray(velocity, dtype=float)
     acceleration = np.asarray(acceleration, dtype=float)
     jerk = np.asarray(jerk, dtype=float)
-    if velocity.shape != (2,) or acceleration.shape != (2,) or jerk.shape != (2,):
-        raise ValueError("velocity, acceleration, and jerk must have shape (2,)")
 
     p = model.p
     c = current_per_acceleration(model)
@@ -49,8 +47,6 @@ def trajectory_state(
     position = np.asarray(position, dtype=float)
     velocity = np.asarray(velocity, dtype=float)
     acceleration = np.asarray(acceleration, dtype=float)
-    if position.shape != (2,) or velocity.shape != (2,) or acceleration.shape != (2,):
-        raise ValueError("position, velocity, and acceleration must have shape (2,)")
 
     current = current_per_acceleration(model) * acceleration
     return np.array(

@@ -79,8 +79,6 @@ class FourierCurve:
 
     @classmethod
     def fit(cls, points: RealArray, order: int) -> "FourierCurve":
-        if order < 1 or 2 * order + 1 > len(points):
-            raise ValueError("order must satisfy 1 <= 2*order+1 <= number of samples")
         signal = points[:, 0] + 1j * points[:, 1]
         spectrum = np.fft.fft(signal) / len(signal)
         frequencies = np.arange(-order, order + 1, dtype=int)
