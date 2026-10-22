@@ -16,7 +16,7 @@ class NozzleParameters:
     resistance: float = 12.0  # R_n [ohm]
     inductance: float = 1.0e-3  # L_n [H]
     capacitance: float = 100.0e-6  # C_n [F]
-    thermal_capacitance: float = 45.0  # C_t,n [J/K]
+    thermal_capacitance: float = 0.5  # C_t,n [J/K]
     thermal_resistance: float = 4.0  # R_t,n [K/W]
     ambient_temperature: float = 25.0  # T_e [degC]
 
