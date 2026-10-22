@@ -62,12 +62,13 @@ def resample_by_arclength(contour: RealArray, samples: int) -> tuple[RealArray, 
 
 
 def scale_to_workspace(points: RealArray, size: float) -> RealArray:
-    """Center a curve and scale its largest span to ``size`` metres."""
-    centered = points - 0.5 * (points.min(axis=0) + points.max(axis=0))
-    span = np.ptp(centered, axis=0).max()
+    """Place a scaled curve above and right of the lower-left origin."""
+    lower_left = points - points.min(axis=0)
+    span = np.ptp(lower_left, axis=0).max()
     if span == 0.0:
         raise ValueError("Cannot scale a zero-size contour")
-    return centered * (size / span)
+    margin = 5.0e-3
+    return margin + lower_left * ((size - 2.0 * margin) / span)
 
 
 @dataclass(frozen=True)
@@ -109,4 +110,3 @@ class FourierCurve:
         np.savetxt(
             path, table, delimiter=",", header="frequency,real,imag", comments=""
         )
-

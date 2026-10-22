@@ -13,9 +13,11 @@ from corexy.model import CoreXYModel
 from plot_style import FIGURE_SIZE, SQUARE_FIGURE_SIZE, configure_plots, format_axes, save_figure
 
 
-# Desired ellipse: x(t) = A*cos(omega*t), y(t) = B*sin(omega*t).
+# Desired ellipse in the first quadrant:
+# x(t) = M + A*(1 + cos(omega*t)), y(t) = M + B*(1 + sin(omega*t)).
 A = 0.08  # x semi-axis [m]
 B = 0.04  # y semi-axis [m]
+WORKSPACE_MARGIN = 0.005  # [m]
 PERIOD = 4.0  # [s]
 SAMPLES = 1201
 
@@ -50,7 +52,14 @@ def initial_state(model: CoreXYModel) -> NDArray[np.float64]:
     c = (2.0 * p.motor_inertia + p.mass * p.pulley_radius**2) / (
         p.torque_constant * p.pulley_radius
     )
-    return np.array([A, 0.0, -c * A * omega**2, 0.0, B * omega, 0.0])
+    return np.array([
+        WORKSPACE_MARGIN + 2.0 * A,
+        0.0,
+        -c * A * omega**2,
+        WORKSPACE_MARGIN + B,
+        B * omega,
+        0.0,
+    ])
 
 
 def main() -> None:
@@ -71,8 +80,8 @@ def main() -> None:
     position = solution.y[[0, 3]]
     reference = np.vstack(
         (
-            A * np.cos(2.0 * np.pi * time / PERIOD),
-            B * np.sin(2.0 * np.pi * time / PERIOD),
+            WORKSPACE_MARGIN + A * (1.0 + np.cos(2.0 * np.pi * time / PERIOD)),
+            WORKSPACE_MARGIN + B * (1.0 + np.sin(2.0 * np.pi * time / PERIOD)),
         )
     )
     axis_inputs = np.column_stack([inputs(t, model) for t in time])
@@ -85,6 +94,10 @@ def main() -> None:
     ax.plot(*position, label=r"$\mathrm{Simulated\ model}$")
     ax.set(xlabel=r"$x\ [\mathrm{m}]$", ylabel=r"$y\ [\mathrm{m}]$")
     format_axes(ax, equal=True)
+    ax.set(
+        xlim=(0.0, 2.0 * A + 2.0 * WORKSPACE_MARGIN),
+        ylim=(0.0, 2.0 * B + 2.0 * WORKSPACE_MARGIN),
+    )
     ax.legend()
     path_destination = output_directory / "q1_4_ellipse_path.png"
     save_figure(fig, path_destination)

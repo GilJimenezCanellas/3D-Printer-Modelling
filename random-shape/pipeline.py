@@ -64,6 +64,7 @@ def save_processing_plots(
     color = ax.scatter(sampled[:, 0], sampled[:, 1], c=parameter, s=12, cmap="viridis")
     ax.set(xlabel=r"$x\ [\mathrm{m}]$", ylabel=r"$y\ [\mathrm{m}]$")
     format_axes(ax, equal=True)
+    ax.set(xlim=(0.0, None), ylim=(0.0, None))
     divider = make_axes_locatable(ax)
     colorbar_ax = divider.append_axes("right", size="5%", pad=0.15)
     colorbar = fig.colorbar(color, cax=colorbar_ax)
@@ -100,6 +101,7 @@ def save_processing_plots(
     ax.plot(reconstructed[:, 0], reconstructed[:, 1], "--", label=r"$\mathrm{Fourier\ reconstruction}$")
     ax.set(xlabel=r"$x\ [\mathrm{m}]$", ylabel=r"$y\ [\mathrm{m}]$")
     format_axes(ax, equal=True)
+    ax.set(xlim=(0.0, None), ylim=(0.0, None))
     ax.legend()
     save_figure(fig, output / "07_reconstruction.png")
     plt.close(fig)
@@ -157,6 +159,7 @@ def run(image: Path, order: int, contour_samples: int, simulation_samples: int,
     ax.plot(*actual, label=r"$\mathrm{Simulated\ dynamics}$")
     ax.set(xlabel=r"$x\ [\mathrm{m}]$", ylabel=r"$y\ [\mathrm{m}]$")
     format_axes(ax, equal=True)
+    ax.set(xlim=(0.0, None), ylim=(0.0, None))
     ax.legend()
     save_figure(fig, output / "08_trajectory.png")
     plt.close(fig)
@@ -200,4 +203,3 @@ if __name__ == "__main__":
                       args.simulation_samples, args.workspace_size,
                       args.period, args.output_root)
     print(f"Results saved in {destination}")
-

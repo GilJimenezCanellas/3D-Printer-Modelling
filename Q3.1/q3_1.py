@@ -173,6 +173,7 @@ def plot_print_stages(model, solution, output: Path) -> None:
             ylabel=r"$y\ [\mathrm{m}]$",
         )
         format_axes(ax, equal=True)
+        ax.set(xlim=(0.0, None), ylim=(0.0, None))
         ax.legend(fontsize=14)
         save_figure(fig, output / f"q3_1_spain_stage_{stage + 1}.png")
         plt.close(fig)
