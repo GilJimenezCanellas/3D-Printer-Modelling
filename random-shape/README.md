@@ -49,6 +49,15 @@ white-on-black images are both accepted.
 
    ![Catalunya inverse-dynamics inputs](docs/images/catalunya_voltages.png)
 
+## Additional examples
+
+The same procedure can be applied to other silhouettes; Italy and Spain are
+shown below as two further examples.
+
+![Italy reference and simulated trajectory](docs/images/italy_trajectory.png)
+
+![Spain reference and simulated trajectory](docs/images/spain_trajectory.png)
+
 ## Files and outputs
 
 - `fourier_curve.py`: contour extraction, resampling, Fourier fitting, and evaluation.
