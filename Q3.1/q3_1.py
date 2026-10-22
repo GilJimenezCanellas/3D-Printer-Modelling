@@ -112,7 +112,12 @@ def plot_histories(model, solution, destination: Path) -> None:
         label=r"$\tau_2$",
     )
     axes[2].set(xlabel=r"$t\ [\mathrm{s}]$", ylabel=r"$\tau\ [\mathrm{s}]$")
-    axes[2].legend(ncol=3)
+    axes[2].legend(
+        ncol=3,
+        loc="center",
+        bbox_to_anchor=(0.75, 9.0),
+        bbox_transform=axes[2].get_yaxis_transform(),
+    )
 
     mark_modes(axes, solution)
     for ax in axes:
