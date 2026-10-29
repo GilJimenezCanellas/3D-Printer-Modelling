@@ -3,13 +3,13 @@
 A compact simulation of a 3D printer that combines continuous physical dynamics, discrete operating logic, and closed-loop control.
 
 <p align="center">
-  <img src="Q3.1/outputs/q3_1_hybrid_histories.png" width="92%" alt="Hybrid printer execution histories">
-</p>
-
-<p align="center">
   <img src="Q3.1/outputs/q3_1_spain_stage_1.png" width="32%" alt="Spain print stage 1">
   <img src="Q3.1/outputs/q3_1_spain_stage_2.png" width="32%" alt="Spain print stage 2">
   <img src="Q3.1/outputs/q3_1_spain_stage_3.png" width="32%" alt="Spain print stage 3">
+</p>
+
+<p align="center">
+  <img src="Q3.1/outputs/q3_1_hybrid_histories.png" width="92%" alt="Hybrid printer execution histories">
 </p>
 
 ## Models
