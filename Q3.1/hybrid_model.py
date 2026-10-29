@@ -15,7 +15,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "Q1.5"), str(ROOT / "random-shape")]
 
 from corexy.model import CoreXYModel
 from fourier_curve import FourierCurve
-from inverse_dynamics import inverse_dynamics, trajectory_state
+from inverse_dynamics import inverse_dynamics
 from nozzle_model import NozzleModel
 
 
@@ -46,11 +46,10 @@ MODE_NAMES = {
 @dataclass(frozen=True)
 class HybridParameters:
     printing_temperature: float = 210.0
-    heating_voltage: float = 24.0
     cold_error: float = 1.0
+    hot_error: float = 3.0
     travel_time: float = 2.0
     position_gain: float = 200.0
-    velocity_gain: float = 10.0
     tau_1: float = 12.0
     tau_3: float = 4.78
     tau_2: float = 1.0
@@ -111,6 +110,70 @@ def load_fourier_curve(path: Path) -> FourierCurve:
     )
 
 
+@dataclass(frozen=True)
+class ControlInputs:
+    """Exogenous voltage inputs applied to the common plant dynamics."""
+
+    nozzle_voltage: float
+    motion_voltage: Vector
+
+
+class PrinterController:
+    """Output-feedback controller driven by measurements and the FSM mode."""
+
+    def __init__(
+        self,
+        motion: CoreXYModel,
+        nozzle: NozzleModel,
+        parameters: HybridParameters,
+    ) -> None:
+        self.motion = motion
+        self.nozzle = nozzle
+        self.p = parameters
+        self.saved_position = np.zeros(2)
+
+    @property
+    def holding_voltage(self) -> float:
+        heat_loss = (
+            self.p.printing_temperature - self.nozzle.p.ambient_temperature
+        ) / self.nozzle.p.thermal_resistance
+        return np.sqrt(heat_loss * self.nozzle.p.resistance)
+
+    def latch_position(self, measurements: Vector) -> None:
+        """Store the measured Cartesian position before leaving S0."""
+        self.saved_position = measurements[[3, 6]].copy()
+
+    def inputs(
+        self,
+        mode: Mode,
+        measurements: Vector,
+        print_kinematics: tuple[Vector, Vector, Vector] | None = None,
+    ) -> ControlInputs:
+        """Calculate nozzle and Cartesian motor voltages."""
+        nozzle_voltage = (
+            0.0
+            if mode in (Mode.COOL, Mode.REPLACE)
+            else self.holding_voltage
+        )
+        position = measurements[[3, 6]]
+        if mode == Mode.RETURN_HOME:
+            motion_voltage = self.p.position_gain * (np.zeros(2) - position)
+        elif mode == Mode.MOVE_TO_START:
+            motion_voltage = self.p.position_gain * (
+                self.saved_position - position
+            )
+        elif mode == Mode.PRINT:
+            if print_kinematics is None:
+                raise ValueError("print kinematics are required in S0")
+            velocity, acceleration, jerk = print_kinematics
+            motion_voltage = inverse_dynamics(
+                self.motion, velocity, acceleration, jerk
+            )
+        else:
+            motion_voltage = np.zeros(2)
+        return ControlInputs(nozzle_voltage, motion_voltage)
+
+
 class HybridPrinter:
     """Hybrid automaton joining the nozzle and CoreXY state-space models.
 
@@ -129,18 +192,15 @@ class HybridPrinter:
         self.p = parameters
         self.motion = CoreXYModel()
         self.nozzle = NozzleModel()
-
-    @property
-    def holding_voltage(self) -> float:
-        p_n = self.nozzle.p
-        heat_loss = (
-            self.p.printing_temperature - p_n.ambient_temperature
-        ) / p_n.thermal_resistance
-        return np.sqrt(heat_loss * p_n.resistance)
+        self.controller = PrinterController(
+            self.motion, self.nozzle, self.p
+        )
 
     def invariant(self, mode: Mode, state: Vector, local_time: float) -> bool:
         temperature = state[0]
-        hot = np.isclose(temperature, self.p.printing_temperature, atol=1e-6)
+        hot = temperature >= (
+            self.p.printing_temperature - self.p.hot_error
+        )
         home = np.hypot(state[3], state[6]) <= 1e-6
         if mode == Mode.PRINT:
             return hot and local_time <= self.print_time
@@ -156,29 +216,26 @@ class HybridPrinter:
                 and state[9] <= self.p.tau_3
             )
         if mode == Mode.HEAT:
-            return temperature <= self.p.printing_temperature
+            return temperature <= (
+                self.p.printing_temperature - self.p.hot_error
+            )
         return hot and local_time <= self.p.travel_time
 
     def system(
         self,
         local_time: float,
         state: Vector,
-        mode: Mode,
-        motion_voltage: Vector | None = None,
-        nozzle_voltage: float | None = None,
-        tau_rate: float = 0.0,
+        inputs: ControlInputs,
     ) -> Vector:
+        """Common continuous dynamics used in every discrete mode."""
         derivative = np.zeros(12)
-        if nozzle_voltage is None:
-            nozzle_voltage = 0.0 if mode == Mode.COOL else self.holding_voltage
         derivative[:3] = self.nozzle.derivative(
-            local_time, state[:3], nozzle_voltage
+            local_time, state[:3], inputs.nozzle_voltage
         )
-        if motion_voltage is not None:
-            derivative[3:9] = self.motion.derivative(
-                local_time, state[3:9], motion_voltage
-            )
-        derivative[9] = tau_rate
+        derivative[3:9] = self.motion.derivative(
+            local_time, state[3:9], inputs.motion_voltage
+        )
+        derivative[9] = 1.0
         return derivative
 
     def simulate(self, scenario: Scenario = Scenario()) -> HybridSolution:
@@ -190,6 +247,7 @@ class HybridPrinter:
             0.0, 0.0, 0.0,
             0.0, drawing_start[0], drawing_start[1],
         ])
+        self.controller.saved_position = drawing_start.copy()
         time_parts: list[Vector] = []
         state_parts: list[NDArray[np.float64]] = []
         mode_parts: list[NDArray[np.int64]] = []
@@ -237,7 +295,7 @@ class HybridPrinter:
 
         def thermal_segment(mode: Mode, heating: bool) -> None:
             target = (
-                self.p.printing_temperature
+                self.p.printing_temperature - self.p.hot_error
                 if heating
                 else ambient + self.p.cold_error
             )
@@ -247,9 +305,10 @@ class HybridPrinter:
 
             event.terminal = True
             event.direction = 1 if heating else -1
-            voltage = self.p.heating_voltage if heating else 0.0
             result = solve_ivp(
-                lambda t, x: self.system(t, x, mode, nozzle_voltage=voltage),
+                lambda t, x: self.system(
+                    t, x, self.controller.inputs(mode, x)
+                ),
                 (0.0, 2000.0),
                 state,
                 events=event,
@@ -267,17 +326,15 @@ class HybridPrinter:
             thermal_segment(Mode.HEAT, True)
             transitions.append(Transition(
                 global_time, Mode.HEAT, Mode.MOVE_TO_START,
-                "T_n >= T_set", "T_n := T_set; heater := hold",
+                "T_n >= T_set - Delta_T_hot",
+                "controller: u_n := u_set",
             ))
-            state[:3] = self._thermal_hold_state()
-
-            start_position = state[10:12].copy()
+            start_position = self.controller.saved_position.copy()
             fixed_segment(
                 Mode.MOVE_TO_START,
                 self.p.travel_time,
                 lambda t, x: self.system(
-                    t, x, Mode.MOVE_TO_START,
-                    self._pd_voltage(x, start_position),
+                    t, x, self.controller.inputs(Mode.MOVE_TO_START, x)
                 ),
                 lambda times: np.repeat(
                     start_position[None, :], len(times), axis=0
@@ -285,8 +342,9 @@ class HybridPrinter:
             )
             transitions.append(Transition(
                 global_time, Mode.MOVE_TO_START, Mode.PRINT,
-                "t_6 >= travel_time", "x_m := (x_s,y_s)",
+                "t_6 >= travel_time", "tau := 0",
             ))
+            state[9] = 0.0
 
             if event_index < len(scenario.events):
                 _, event_fraction = scenario.events[event_index]
@@ -296,16 +354,6 @@ class HybridPrinter:
                 print_end = self.print_time
                 print_speed = 2.0
             print_duration = (print_end - print_progress) / print_speed
-            position, velocity, acceleration, _ = self.curve.time_derivatives(
-                print_progress, self.print_time
-            )
-            state[3:9] = trajectory_state(
-                self.motion,
-                position[0],
-                print_speed * velocity[0],
-                print_speed**2 * acceleration[0],
-            )
-
             def print_data(t):
                 position_t, velocity_t, acceleration_t, jerk_t = (
                     self.curve.time_derivatives(
@@ -321,10 +369,12 @@ class HybridPrinter:
 
             def print_dynamics(t, x):
                 _, velocity_t, acceleration_t, jerk_t = print_data(t)
-                voltage = inverse_dynamics(
-                    self.motion, velocity_t[0], acceleration_t[0], jerk_t[0]
+                inputs = self.controller.inputs(
+                    Mode.PRINT,
+                    x,
+                    (velocity_t[0], acceleration_t[0], jerk_t[0]),
                 )
-                return self.system(t, x, Mode.PRINT, voltage, tau_rate=1.0)
+                return self.system(t, x, inputs)
 
             fixed_segment(
                 Mode.PRINT,
@@ -348,56 +398,55 @@ class HybridPrinter:
             )
             transitions.append(Transition(
                 global_time, Mode.PRINT, Mode.RETURN_HOME, reason,
-                "(x_s,y_s) := (x,y); printing := false; tau := 0",
+                "controller: (x_s,y_s) := (x,y); printing := false",
             ))
-            state[10:12] = [state[3], state[6]]
-            state[9] = 0.0
+            self.controller.latch_position(state)
+            state[10:12] = self.controller.saved_position
             event_index += 1
             home = np.zeros(2)
             fixed_segment(
                 Mode.RETURN_HOME,
                 self.p.travel_time,
                 lambda t, x: self.system(
-                    t, x, Mode.RETURN_HOME, self._pd_voltage(x, home)
+                    t, x, self.controller.inputs(Mode.RETURN_HOME, x)
                 ),
                 lambda times: np.repeat(home[None, :], len(times), axis=0),
             )
-            state[3:9] = 0.0
             transitions.append(Transition(
                 global_time, Mode.RETURN_HOME, Mode.WIPE,
-                "(x,y) = (0,0)", "motion state := 0",
+                "(x,y) = (0,0)", "tau := 0",
             ))
+            state[9] = 0.0
 
             fixed_segment(
                 Mode.WIPE,
                 self.p.tau_2,
                 lambda t, x: self.system(
-                    t, x, Mode.WIPE, tau_rate=1.0
+                    t, x, self.controller.inputs(Mode.WIPE, x)
                 ),
             )
             transitions.append(Transition(
                 global_time, Mode.WIPE, Mode.COOL,
-                "tau >= tau_2", "u_n := 0; tau := 0",
+                "tau >= tau_2", "controller: u_n := 0",
             ))
-            state[9] = 0.0
 
             thermal_segment(Mode.COOL, False)
-            state[1:3] = 0.0
             transitions.append(Transition(
                 global_time, Mode.COOL, Mode.REPLACE,
-                "T_n <= T_e + Delta_T_cold", "electrical state := 0",
+                "T_n <= T_e + Delta_T_cold",
+                "tau := 0",
             ))
+            state[9] = 0.0
             fixed_segment(
                 Mode.REPLACE,
                 self.p.tau_3,
                 lambda t, x: self.system(
-                    t, x, Mode.REPLACE, nozzle_voltage=0.0, tau_rate=1.0
+                    t, x, self.controller.inputs(Mode.REPLACE, x)
                 ),
             )
-            state[9] = 0.0
             transitions.append(Transition(
                 global_time, Mode.REPLACE, Mode.HEAT,
-                "tau >= tau_3", "tau := 0; new filament loaded",
+                "tau >= tau_3", "new filament loaded",
             ))
 
         return HybridSolution(
@@ -406,22 +455,4 @@ class HybridPrinter:
             np.concatenate(mode_parts),
             np.vstack(reference_parts),
             tuple(transitions),
-        )
-
-    def _thermal_hold_state(self) -> Vector:
-        voltage = self.holding_voltage
-        return np.array([
-            self.p.printing_temperature,
-            voltage,
-            voltage / self.nozzle.p.resistance,
-        ])
-
-
-    def _pd_voltage(self, state: Vector, target: Vector) -> Vector:
-        """Return Cartesian PD voltages from measured position and velocity."""
-        position = state[[3, 6]]
-        velocity = state[[4, 7]]
-        return (
-            self.p.position_gain * (target - position)
-            - self.p.velocity_gain * velocity
         )
