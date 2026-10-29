@@ -13,9 +13,11 @@ from scipy.integrate import solve_ivp
 
 BASE_DIR = Path(__file__).resolve().parent
 ROOT = BASE_DIR.parent
-sys.path.insert(0, str(ROOT))
+RANDOM_SHAPE_DIR = ROOT / "random-shape"
+sys.path[:0] = [str(ROOT), str(RANDOM_SHAPE_DIR)]
 
 from corexy.model import CoreXYModel
+from inverse_dynamics import inverse_dynamics
 from plot_style import configure_plots, format_axes, save_figure
 
 
@@ -60,19 +62,6 @@ def edge_kinematics(edge: int, local_time: float | Vector) -> tuple[Vector, Vect
     return position, velocity, acceleration, jerk
 
 
-def feedforward_voltage(model: CoreXYModel, velocity: Vector, acceleration: Vector, jerk: Vector) -> Vector:
-    """Compute [u_x, u_y] from the flatness-based inverse dynamics."""
-    p = model.p
-    c = (2.0 * p.motor_inertia + p.mass * p.pulley_radius**2) / (
-        p.torque_constant * p.pulley_radius
-    )
-    return (
-        c * p.inductance * jerk
-        + c * p.resistance * acceleration
-        + 2.0 * p.back_emf_constant * velocity / p.pulley_radius
-    )
-
-
 def simulate_square(model: CoreXYModel) -> tuple[Vector, Vector, Vector, Vector]:
     """Simulate all four edges, stopping at every corner by construction."""
     time_parts: list[Vector] = []
@@ -86,7 +75,7 @@ def simulate_square(model: CoreXYModel) -> tuple[Vector, Vector, Vector, Vector]
 
         def voltage_at(time: float) -> Vector:
             _, velocity, acceleration, jerk = edge_kinematics(edge, time)
-            return feedforward_voltage(model, velocity, acceleration, jerk)
+            return inverse_dynamics(model, velocity, acceleration, jerk)
 
         result = solve_ivp(
             lambda time, current: model.derivative(time, current, voltage_at(time)),
