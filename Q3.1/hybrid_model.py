@@ -49,9 +49,11 @@ class HybridParameters:
     heating_voltage: float = 24.0
     cold_error: float = 1.0
     travel_time: float = 2.0
+    position_gain: float = 200.0
+    velocity_gain: float = 10.0
     tau_1: float = 12.0
     tau_2: float = 4.78
-    wipe_epsilon: float = 1.0
+    tau_3: float = 1.0
     output_step: float = 0.05
 
 
@@ -145,7 +147,7 @@ class HybridPrinter:
         if mode == Mode.RETURN_HOME:
             return hot and local_time <= self.p.travel_time
         if mode == Mode.WIPE:
-            return hot and home
+            return hot and home and state[9] <= self.p.tau_3
         if mode == Mode.COOL:
             return temperature >= self.nozzle.p.ambient_temperature + self.p.cold_error
         if mode == Mode.REPLACE:
@@ -270,13 +272,16 @@ class HybridPrinter:
             state[:3] = self._thermal_hold_state()
 
             start_position = state[10:12].copy()
-            travel = self._line_trajectory(np.zeros(2), start_position, self.p.travel_time)
-            state[3:9] = travel(0.0)[4]
             fixed_segment(
                 Mode.MOVE_TO_START,
                 self.p.travel_time,
-                lambda t, x: self.system(t, x, Mode.MOVE_TO_START, travel(t)[3]),
-                lambda times: np.array([travel(t)[0] for t in times]),
+                lambda t, x: self.system(
+                    t, x, Mode.MOVE_TO_START,
+                    self._pd_voltage(x, start_position),
+                ),
+                lambda times: np.repeat(
+                    start_position[None, :], len(times), axis=0
+                ),
             )
             transitions.append(Transition(
                 global_time, Mode.MOVE_TO_START, Mode.PRINT,
@@ -343,20 +348,19 @@ class HybridPrinter:
             )
             transitions.append(Transition(
                 global_time, Mode.PRINT, Mode.RETURN_HOME, reason,
-                "(x_s,y_s) := (x,y); printing := false",
+                "(x_s,y_s) := (x,y); printing := false; tau := 0",
             ))
             state[10:12] = [state[3], state[6]]
+            state[9] = 0.0
             event_index += 1
-            interrupted_tau = state[9]
-            return_path = self._line_trajectory(
-                np.array([state[3], state[6]]), np.zeros(2), self.p.travel_time
-            )
-            state[3:9] = return_path(0.0)[4]
+            home = np.zeros(2)
             fixed_segment(
                 Mode.RETURN_HOME,
                 self.p.travel_time,
-                lambda t, x: self.system(t, x, Mode.RETURN_HOME, return_path(t)[3]),
-                lambda times: np.array([return_path(t)[0] for t in times]),
+                lambda t, x: self.system(
+                    t, x, Mode.RETURN_HOME, self._pd_voltage(x, home)
+                ),
+                lambda times: np.repeat(home[None, :], len(times), axis=0),
             )
             state[3:9] = 0.0
             transitions.append(Transition(
@@ -364,18 +368,16 @@ class HybridPrinter:
                 "(x,y) = (0,0)", "motion state := 0",
             ))
 
-            wipe_limit = self.p.tau_1 + self.p.wipe_epsilon
-            wipe_duration = wipe_limit - interrupted_tau
             fixed_segment(
                 Mode.WIPE,
-                wipe_duration,
+                self.p.tau_3,
                 lambda t, x: self.system(
                     t, x, Mode.WIPE, tau_rate=1.0
                 ),
             )
             transitions.append(Transition(
                 global_time, Mode.WIPE, Mode.COOL,
-                "tau >= tau_1 + epsilon", "u_n := 0; tau := 0",
+                "tau >= tau_3", "u_n := 0; tau := 0",
             ))
             state[9] = 0.0
 
@@ -414,23 +416,12 @@ class HybridPrinter:
             voltage / self.nozzle.p.resistance,
         ])
 
-    def _line_trajectory(self, start: Vector, end: Vector, duration: float):
-        delta = end - start
 
-        def trajectory(time: float):
-            s = np.clip(time / duration, 0.0, 1.0)
-            h = 10.0 * s**3 - 15.0 * s**4 + 6.0 * s**5
-            h_1 = (30.0 * s**2 - 60.0 * s**3 + 30.0 * s**4) / duration
-            h_2 = (60.0 * s - 180.0 * s**2 + 120.0 * s**3) / duration**2
-            h_3 = (60.0 - 360.0 * s + 360.0 * s**2) / duration**3
-            position = start + delta * h
-            velocity = delta * h_1
-            acceleration = delta * h_2
-            jerk = delta * h_3
-            voltage = inverse_dynamics(self.motion, velocity, acceleration, jerk)
-            motion_state = trajectory_state(
-                self.motion, position, velocity, acceleration
-            )
-            return position, velocity, acceleration, voltage, motion_state
-
-        return trajectory
+    def _pd_voltage(self, state: Vector, target: Vector) -> Vector:
+        """Return Cartesian PD voltages from measured position and velocity."""
+        position = state[[3, 6]]
+        velocity = state[[4, 7]]
+        return (
+            self.p.position_gain * (target - position)
+            - self.p.velocity_gain * velocity
+        )

@@ -100,10 +100,10 @@ def plot_histories(model, solution, destination: Path) -> None:
         label=r"$\tau_1$",
     )
     axes[2].axhline(
-        model.p.tau_1 + model.p.wipe_epsilon,
+        model.p.tau_3,
         color="tab:red",
         linestyle="-.",
-        label=r"$\tau_1+\varepsilon$",
+        label=r"$\tau_3$",
     )
     axes[2].axhline(
         model.p.tau_2,
