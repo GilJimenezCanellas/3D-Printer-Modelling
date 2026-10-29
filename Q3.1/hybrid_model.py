@@ -47,7 +47,7 @@ MODE_NAMES = {
 class HybridParameters:
     printing_temperature: float = 210.0
     cold_error: float = 1.0
-    hot_error: float = 3.0
+    hot_error: float = 2.0
     travel_time: float = 2.0
     position_gain: float = 200.0
     tau_1: float = 12.0
@@ -327,8 +327,9 @@ class HybridPrinter:
             transitions.append(Transition(
                 global_time, Mode.HEAT, Mode.MOVE_TO_START,
                 "T_n >= T_set - Delta_T_hot",
-                "controller: u_n := u_set",
+                "controller: u_n := u_set; tau := 0",
             ))
+            state[9] = 0.0
             start_position = self.controller.saved_position.copy()
             fixed_segment(
                 Mode.MOVE_TO_START,
@@ -398,9 +399,10 @@ class HybridPrinter:
             )
             transitions.append(Transition(
                 global_time, Mode.PRINT, Mode.RETURN_HOME, reason,
-                "controller: (x_s,y_s) := (x,y); printing := false",
+                "controller: (x_s,y_s) := (x,y); printing := false; tau := 0",
             ))
             self.controller.latch_position(state)
+            state[9] = 0.0
             state[10:12] = self.controller.saved_position
             event_index += 1
             home = np.zeros(2)
@@ -427,8 +429,9 @@ class HybridPrinter:
             )
             transitions.append(Transition(
                 global_time, Mode.WIPE, Mode.COOL,
-                "tau >= tau_2", "controller: u_n := 0",
+                "tau >= tau_2", "controller: u_n := 0; tau := 0",
             ))
+            state[9] = 0.0
 
             thermal_segment(Mode.COOL, False)
             transitions.append(Transition(
@@ -446,8 +449,9 @@ class HybridPrinter:
             )
             transitions.append(Transition(
                 global_time, Mode.REPLACE, Mode.HEAT,
-                "tau >= tau_3", "new filament loaded",
+                "tau >= tau_3", "new filament loaded; tau := 0",
             ))
+            state[9] = 0.0
 
         return HybridSolution(
             np.concatenate(time_parts),
