@@ -100,16 +100,16 @@ def plot_histories(model, solution, destination: Path) -> None:
         label=r"$\tau_1$",
     )
     axes[2].axhline(
-        model.p.tau_3,
+        model.p.tau_2,
         color="tab:red",
         linestyle="-.",
-        label=r"$\tau_3$",
+        label=r"$\tau_2$",
     )
     axes[2].axhline(
-        model.p.tau_2,
+        model.p.tau_3,
         color="0.4",
         linestyle=":",
-        label=r"$\tau_2$",
+        label=r"$\tau_3$",
     )
     axes[2].set(xlabel=r"$t\ [\mathrm{s}]$", ylabel=r"$\tau\ [\mathrm{s}]$")
     axes[2].legend(

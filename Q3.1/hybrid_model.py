@@ -52,8 +52,8 @@ class HybridParameters:
     position_gain: float = 200.0
     velocity_gain: float = 10.0
     tau_1: float = 12.0
-    tau_2: float = 4.78
-    tau_3: float = 1.0
+    tau_3: float = 4.78
+    tau_2: float = 1.0
     output_step: float = 0.05
 
 
@@ -147,13 +147,13 @@ class HybridPrinter:
         if mode == Mode.RETURN_HOME:
             return hot and local_time <= self.p.travel_time
         if mode == Mode.WIPE:
-            return hot and home and state[9] <= self.p.tau_3
+            return hot and home and state[9] <= self.p.tau_2
         if mode == Mode.COOL:
             return temperature >= self.nozzle.p.ambient_temperature + self.p.cold_error
         if mode == Mode.REPLACE:
             return (
                 temperature <= self.nozzle.p.ambient_temperature + self.p.cold_error
-                and state[9] <= self.p.tau_2
+                and state[9] <= self.p.tau_3
             )
         if mode == Mode.HEAT:
             return temperature <= self.p.printing_temperature
@@ -370,14 +370,14 @@ class HybridPrinter:
 
             fixed_segment(
                 Mode.WIPE,
-                self.p.tau_3,
+                self.p.tau_2,
                 lambda t, x: self.system(
                     t, x, Mode.WIPE, tau_rate=1.0
                 ),
             )
             transitions.append(Transition(
                 global_time, Mode.WIPE, Mode.COOL,
-                "tau >= tau_3", "u_n := 0; tau := 0",
+                "tau >= tau_2", "u_n := 0; tau := 0",
             ))
             state[9] = 0.0
 
@@ -389,7 +389,7 @@ class HybridPrinter:
             ))
             fixed_segment(
                 Mode.REPLACE,
-                self.p.tau_2,
+                self.p.tau_3,
                 lambda t, x: self.system(
                     t, x, Mode.REPLACE, nozzle_voltage=0.0, tau_rate=1.0
                 ),
@@ -397,7 +397,7 @@ class HybridPrinter:
             state[9] = 0.0
             transitions.append(Transition(
                 global_time, Mode.REPLACE, Mode.HEAT,
-                "tau >= tau_2", "tau := 0; new filament loaded",
+                "tau >= tau_3", "tau := 0; new filament loaded",
             ))
 
         return HybridSolution(
