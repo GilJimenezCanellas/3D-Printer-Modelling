@@ -32,6 +32,19 @@ class Mode(IntEnum):
     MOVE_TO_START = 6
 
 
+class ParkingState(IntEnum):
+    INITIAL = 0
+    LEFT_DETECTED = 1
+    BOTTOM_DETECTED = 2
+    PARKED = 3
+    ERROR = 4
+
+
+class ParkingCommand(IntEnum):
+    VERTICAL = 0
+    HORIZONTAL = 1
+
+
 MODE_NAMES = {
     Mode.PRINT: "Print",
     Mode.RETURN_HOME: "Return home",
@@ -46,9 +59,10 @@ MODE_NAMES = {
 @dataclass(frozen=True)
 class HybridParameters:
     printing_temperature: float = 210.0
-    cold_error: float = 1.0
-    hot_error: float = 2.0
-    travel_time: float = 2.0
+    temperature_tolerance: float = 0.1
+    position_tolerance: float = 1.0e-6
+    velocity_tolerance: float = 1.0e-5
+    maximum_positioning_time: float = 30.0
     position_gain: float = 200.0
     tau_1: float = 12.0
     tau_3: float = 4.78
@@ -76,6 +90,7 @@ class HybridSolution:
     state: NDArray[np.float64]
     mode: NDArray[np.int64]
     reference: NDArray[np.float64]
+    parking_state: NDArray[np.int64]
     transitions: tuple[Transition, ...]
 
     @property
@@ -111,6 +126,57 @@ def load_fourier_curve(path: Path) -> FourierCurve:
 
 
 @dataclass(frozen=True)
+class MotorMeasurements:
+    """Measured motor angles and angular velocities."""
+
+    angles: Vector
+    angular_velocities: Vector
+
+
+class ParkingDFA:
+    """Detect arrival at both home boundaries from commanded motion and speed."""
+
+    def __init__(self) -> None:
+        self.state = ParkingState.PARKED
+
+    def reset(self) -> None:
+        self.state = ParkingState.INITIAL
+
+    def update(
+        self,
+        command: ParkingCommand,
+        angular_velocities: Vector,
+        angular_velocity_tolerance: float,
+    ) -> ParkingState:
+        moving = bool(
+            np.any(np.abs(angular_velocities) > angular_velocity_tolerance)
+        )
+        if self.state == ParkingState.INITIAL:
+            if not moving:
+                self.state = (
+                    ParkingState.BOTTOM_DETECTED
+                    if command == ParkingCommand.VERTICAL
+                    else ParkingState.LEFT_DETECTED
+                )
+        elif self.state == ParkingState.BOTTOM_DETECTED:
+            if command != ParkingCommand.HORIZONTAL:
+                self.state = ParkingState.ERROR
+            elif not moving:
+                self.state = ParkingState.PARKED
+        elif self.state == ParkingState.LEFT_DETECTED:
+            if command != ParkingCommand.VERTICAL:
+                self.state = ParkingState.ERROR
+            elif not moving:
+                self.state = ParkingState.PARKED
+        return self.state
+
+
+    @property
+    def parked(self) -> bool:
+        return self.state == ParkingState.PARKED
+
+
+@dataclass(frozen=True)
 class ControlInputs:
     """Exogenous voltage inputs applied to the common plant dynamics."""
 
@@ -139,15 +205,28 @@ class PrinterController:
         ) / self.nozzle.p.thermal_resistance
         return np.sqrt(heat_loss * self.nozzle.p.resistance)
 
-    def latch_position(self, measurements: Vector) -> None:
-        """Store the measured Cartesian position before leaving S0."""
-        self.saved_position = measurements[[3, 6]].copy()
+    def position(self, measurements: MotorMeasurements) -> Vector:
+        """Reconstruct Cartesian position from measured motor angles."""
+        left, right = measurements.angles
+        radius = self.motion.p.pulley_radius
+        return 0.5 * radius * np.array([left + right, left - right])
+
+    def velocity(self, measurements: MotorMeasurements) -> Vector:
+        """Reconstruct Cartesian velocity from measured motor speeds."""
+        left, right = measurements.angular_velocities
+        radius = self.motion.p.pulley_radius
+        return 0.5 * radius * np.array([left + right, left - right])
+
+    def latch_position(self, measurements: MotorMeasurements) -> None:
+        """Store the reconstructed position before leaving S0."""
+        self.saved_position = self.position(measurements)
 
     def inputs(
         self,
         mode: Mode,
-        measurements: Vector,
+        measurements: MotorMeasurements,
         print_kinematics: tuple[Vector, Vector, Vector] | None = None,
+        motion_reference: Vector | None = None,
     ) -> ControlInputs:
         """Calculate nozzle and Cartesian motor voltages."""
         nozzle_voltage = (
@@ -155,12 +234,15 @@ class PrinterController:
             if mode in (Mode.COOL, Mode.REPLACE)
             else self.holding_voltage
         )
-        position = measurements[[3, 6]]
-        if mode == Mode.RETURN_HOME:
-            motion_voltage = self.p.position_gain * (np.zeros(2) - position)
-        elif mode == Mode.MOVE_TO_START:
+        if mode in (Mode.RETURN_HOME, Mode.MOVE_TO_START):
+            if motion_reference is None:
+                motion_reference = (
+                    np.zeros(2)
+                    if mode == Mode.RETURN_HOME
+                    else self.saved_position
+                )
             motion_voltage = self.p.position_gain * (
-                self.saved_position - position
+                motion_reference - self.position(measurements)
             )
         elif mode == Mode.PRINT:
             if print_kinematics is None:
@@ -195,31 +277,52 @@ class HybridPrinter:
         self.controller = PrinterController(
             self.motion, self.nozzle, self.p
         )
+        self.parking = ParkingDFA()
+
+    def measurements(self, state: Vector) -> MotorMeasurements:
+        """Apply the hybrid output map to the Cartesian motion state."""
+        radius = self.motion.p.pulley_radius
+        x, x_dot, _, y, y_dot, _ = state[3:9]
+        return MotorMeasurements(
+            np.array([(x + y) / radius, (x - y) / radius]),
+            np.array([(x_dot + y_dot) / radius, (x_dot - y_dot) / radius]),
+        )
 
     def invariant(self, mode: Mode, state: Vector, local_time: float) -> bool:
         temperature = state[0]
         hot = temperature >= (
-            self.p.printing_temperature - self.p.hot_error
+            self.p.printing_temperature - self.p.temperature_tolerance
         )
-        home = np.hypot(state[3], state[6]) <= 1e-6
+        home = np.hypot(state[3], state[6]) <= self.p.position_tolerance
         if mode == Mode.PRINT:
-            return hot and local_time <= self.print_time
+            return hot and state[9] <= self.p.tau_1
         if mode == Mode.RETURN_HOME:
-            return hot and local_time <= self.p.travel_time
+            return hot and self.parking.state not in (
+                ParkingState.PARKED, ParkingState.ERROR
+            )
         if mode == Mode.WIPE:
             return hot and home and state[9] <= self.p.tau_2
         if mode == Mode.COOL:
-            return temperature >= self.nozzle.p.ambient_temperature + self.p.cold_error
+            return temperature >= self.nozzle.p.ambient_temperature + self.p.temperature_tolerance
         if mode == Mode.REPLACE:
             return (
-                temperature <= self.nozzle.p.ambient_temperature + self.p.cold_error
+                temperature <= self.nozzle.p.ambient_temperature + self.p.temperature_tolerance
                 and state[9] <= self.p.tau_3
             )
         if mode == Mode.HEAT:
             return temperature <= (
-                self.p.printing_temperature - self.p.hot_error
+                self.p.printing_temperature - self.p.temperature_tolerance
             )
-        return hot and local_time <= self.p.travel_time
+        measurements = self.measurements(state)
+        position_error = np.max(np.abs(
+            self.controller.position(measurements)
+            - self.controller.saved_position
+        ))
+        speed = np.max(np.abs(self.controller.velocity(measurements)))
+        return hot and (
+            position_error > self.p.position_tolerance
+            or speed > self.p.velocity_tolerance
+        )
 
     def system(
         self,
@@ -252,6 +355,7 @@ class HybridPrinter:
         state_parts: list[NDArray[np.float64]] = []
         mode_parts: list[NDArray[np.int64]] = []
         reference_parts: list[NDArray[np.float64]] = []
+        parking_parts: list[NDArray[np.int64]] = []
         transitions: list[Transition] = []
         global_time = 0.0
         event_index = 0
@@ -271,6 +375,9 @@ class HybridPrinter:
             if reference is None:
                 reference = np.full((len(local_time), 2), np.nan)
             reference_parts.append(reference[start:])
+            parking_parts.append(
+                np.full(len(local_time) - start, int(self.parking.state), dtype=int)
+            )
             global_time += local_time[-1]
             state = states[-1].copy()
 
@@ -293,11 +400,57 @@ class HybridPrinter:
             )
             append(mode, local_time, result.y.T, reference(local_time) if reference else None)
 
+        def arrival_event(target: Vector, axes: tuple[int, ...]):
+            def event(_time, current):
+                measurements = self.measurements(current)
+                position_error = np.abs(
+                    self.controller.position(measurements)[list(axes)]
+                    - target[list(axes)]
+                ) / self.p.position_tolerance
+                speed = np.abs(
+                    self.controller.velocity(measurements)[list(axes)]
+                ) / self.p.velocity_tolerance
+                return max(np.max(position_error), np.max(speed)) - 1.0
+
+            event.terminal = True
+            event.direction = -1
+            return event
+
+        def positioning_segment(
+            mode: Mode,
+            target: Vector,
+            axes: tuple[int, ...],
+        ) -> None:
+            event = arrival_event(target, axes)
+            result = solve_ivp(
+                lambda t, x: self.system(
+                    t,
+                    x,
+                    self.controller.inputs(
+                        mode, self.measurements(x), motion_reference=target
+                    ),
+                ),
+                (0.0, self.p.maximum_positioning_time),
+                state,
+                events=event,
+                dense_output=True,
+                method="Radau",
+                rtol=1e-8,
+                atol=1e-10,
+            )
+            if len(result.t_events[0]) == 0:
+                raise RuntimeError(f"{mode.name} did not reach its target")
+            duration = result.t_events[0][0]
+            count = max(2, int(np.ceil(duration / self.p.output_step)) + 1)
+            local_time = np.linspace(0.0, duration, count)
+            reference = np.repeat(target[None, :], count, axis=0)
+            append(mode, local_time, result.sol(local_time).T, reference)
+
         def thermal_segment(mode: Mode, heating: bool) -> None:
             target = (
-                self.p.printing_temperature - self.p.hot_error
+                self.p.printing_temperature - self.p.temperature_tolerance
                 if heating
-                else ambient + self.p.cold_error
+                else ambient + self.p.temperature_tolerance
             )
 
             def event(_time, current):
@@ -307,7 +460,7 @@ class HybridPrinter:
             event.direction = 1 if heating else -1
             result = solve_ivp(
                 lambda t, x: self.system(
-                    t, x, self.controller.inputs(mode, x)
+                    t, x, self.controller.inputs(mode, self.measurements(x))
                 ),
                 (0.0, 2000.0),
                 state,
@@ -326,24 +479,19 @@ class HybridPrinter:
             thermal_segment(Mode.HEAT, True)
             transitions.append(Transition(
                 global_time, Mode.HEAT, Mode.MOVE_TO_START,
-                "T_n >= T_set - Delta_T_hot",
+                "T_n >= T_set - epsilon_T",
                 "controller: u_n := u_set; tau := 0",
             ))
             state[9] = 0.0
+            self.parking.reset()
             start_position = self.controller.saved_position.copy()
-            fixed_segment(
-                Mode.MOVE_TO_START,
-                self.p.travel_time,
-                lambda t, x: self.system(
-                    t, x, self.controller.inputs(Mode.MOVE_TO_START, x)
-                ),
-                lambda times: np.repeat(
-                    start_position[None, :], len(times), axis=0
-                ),
+            positioning_segment(
+                Mode.MOVE_TO_START, start_position, (0, 1)
             )
             transitions.append(Transition(
                 global_time, Mode.MOVE_TO_START, Mode.PRINT,
-                "t_6 >= travel_time", "tau := 0",
+                "(x,y) = (x_s,y_s) and (x_dot,y_dot) = (0,0)",
+                "tau := 0",
             ))
             state[9] = 0.0
 
@@ -372,7 +520,7 @@ class HybridPrinter:
                 _, velocity_t, acceleration_t, jerk_t = print_data(t)
                 inputs = self.controller.inputs(
                     Mode.PRINT,
-                    x,
+                    self.measurements(x),
                     (velocity_t[0], acceleration_t[0], jerk_t[0]),
                 )
                 return self.system(t, x, inputs)
@@ -401,22 +549,36 @@ class HybridPrinter:
                 global_time, Mode.PRINT, Mode.RETURN_HOME, reason,
                 "controller: (x_s,y_s) := (x,y); printing := false; tau := 0",
             ))
-            self.controller.latch_position(state)
+            self.controller.latch_position(self.measurements(state))
             state[9] = 0.0
             state[10:12] = self.controller.saved_position
             event_index += 1
+            self.parking.reset()
             home = np.zeros(2)
-            fixed_segment(
-                Mode.RETURN_HOME,
-                self.p.travel_time,
-                lambda t, x: self.system(
-                    t, x, self.controller.inputs(Mode.RETURN_HOME, x)
-                ),
-                lambda times: np.repeat(home[None, :], len(times), axis=0),
+            positioning_segment(Mode.RETURN_HOME, home, (0, 1))
+
+            angular_tolerance = (
+                2.0 * self.p.velocity_tolerance
+                / self.motion.p.pulley_radius
             )
+            stopped_measurements = self.measurements(state)
+            self.parking.update(
+                ParkingCommand.VERTICAL,
+                stopped_measurements.angular_velocities,
+                angular_tolerance,
+            )
+            self.parking.update(
+                ParkingCommand.HORIZONTAL,
+                stopped_measurements.angular_velocities,
+                angular_tolerance,
+            )
+            parking_parts[-1][-1] = int(self.parking.state)
+            if not self.parking.parked:
+                raise RuntimeError("parking DFA did not reach q_P")
+
             transitions.append(Transition(
                 global_time, Mode.RETURN_HOME, Mode.WIPE,
-                "(x,y) = (0,0)", "tau := 0",
+                "q = q_P and (x,y) = (0,0)", "tau := 0",
             ))
             state[9] = 0.0
 
@@ -424,7 +586,7 @@ class HybridPrinter:
                 Mode.WIPE,
                 self.p.tau_2,
                 lambda t, x: self.system(
-                    t, x, self.controller.inputs(Mode.WIPE, x)
+                    t, x, self.controller.inputs(Mode.WIPE, self.measurements(x))
                 ),
             )
             transitions.append(Transition(
@@ -436,7 +598,7 @@ class HybridPrinter:
             thermal_segment(Mode.COOL, False)
             transitions.append(Transition(
                 global_time, Mode.COOL, Mode.REPLACE,
-                "T_n <= T_e + Delta_T_cold",
+                "T_n <= T_e + epsilon_T",
                 "tau := 0",
             ))
             state[9] = 0.0
@@ -444,7 +606,7 @@ class HybridPrinter:
                 Mode.REPLACE,
                 self.p.tau_3,
                 lambda t, x: self.system(
-                    t, x, self.controller.inputs(Mode.REPLACE, x)
+                    t, x, self.controller.inputs(Mode.REPLACE, self.measurements(x))
                 ),
             )
             transitions.append(Transition(
@@ -458,5 +620,6 @@ class HybridPrinter:
             np.vstack(state_parts),
             np.concatenate(mode_parts),
             np.vstack(reference_parts),
+            np.concatenate(parking_parts),
             tuple(transitions),
         )

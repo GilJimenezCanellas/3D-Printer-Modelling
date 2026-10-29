@@ -198,6 +198,7 @@ def main() -> None:
         time=solution.time,
         state=solution.state,
         mode=solution.mode,
+        parking_state=solution.parking_state,
         reference=solution.reference,
     )
     transition_text = "\n".join(
